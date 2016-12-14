@@ -1,11 +1,7 @@
-**IMPORTANT NOTICE**: This project is currently not supported. We accept pull requests, but we're not doing any feature development/bug fixing
 
+**IMPORTANT NOTICE** Fork of original Asquera project, will support multiple users and simple index/method permissions.
 
 [![Build Status](https://travis-ci.org/Asquera/elasticsearch-http-basic.svg?branch=master)](https://travis-ci.org/Asquera/elasticsearch-http-basic)
-
-**IMPORTANT NOTICE**: versions 1.0.4 is *insecure and should not be used*.
-They have a bug that allows an attacker to get ip authentication by setting
-its ip on the 'Host' header.
 
 # HTTP Basic / Ip auth for ElasticSearch
 
