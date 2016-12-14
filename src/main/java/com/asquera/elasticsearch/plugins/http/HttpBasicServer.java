@@ -19,6 +19,7 @@ import org.elasticsearch.rest.BytesRestResponse;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestRequest.Method;
+import org.elasticsearch.rest.RestStatus;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -35,8 +36,6 @@ import static org.elasticsearch.rest.RestStatus.OK;
 import static org.elasticsearch.rest.RestStatus.UNAUTHORIZED;
 
 // # possible http config
-// http.basic.user: admin
-// http.basic.password: password
 // http.basic.ipwhitelist: ["localhost", "somemoreip"]
 // http.basic.xforward: "X-Forwarded-For"
 // # if you use javascript
@@ -50,8 +49,6 @@ import static org.elasticsearch.rest.RestStatus.UNAUTHORIZED;
  */
 public class HttpBasicServer extends HttpServer {
 
-    private final String adminuser;
-    private final String adminpassword;
     private final InetAddressWhitelist whitelist;
     private final ProxyChains proxyChains;
     private final String xForwardHeader;
@@ -65,8 +62,6 @@ public class HttpBasicServer extends HttpServer {
             NodeService nodeService) {
         super(settings, environment, transport, restController, nodeService);
 
-        this.adminuser = settings.get("http.basic.user", "admin");
-        this.adminpassword = settings.get("http.basic.password", "admin_pw");
         final boolean whitelistEnabled = settings.getAsBoolean("http.basic.ipwhitelist", true);
         String [] whitelisted = new String[0];
         if (whitelistEnabled) {
@@ -81,8 +76,8 @@ public class HttpBasicServer extends HttpServer {
         this.xForwardHeader = settings.get("http.basic.xforward", "");
         this.log = settings.getAsBoolean("http.basic.log", true);
         
-        Loggers.getLogger(getClass()).info("using {} with whitelist: {}, xforward header field: {}, trusted proxy chain: {}",
-                adminuser, whitelist, xForwardHeader, proxyChains);
+        Loggers.getLogger(getClass()).info("using whitelist: {}, xforward header field: {}, trusted proxy chain: {}",
+                whitelist, xForwardHeader, proxyChains);
         this.usersFilename = environment.configFile().getAbsolutePath() + File.separator + "users.conf";
         String ret = reloadUsersFile();
         Loggers.getLogger(getClass()).info(ret);
@@ -90,25 +85,43 @@ public class HttpBasicServer extends HttpServer {
     }
 
     @Override
-    public void internalDispatchRequest(final HttpRequest request, final HttpChannel channel) {
-        if (log) {
+    public void internalDispatchRequest(final HttpRequest request, final HttpChannel channel) 
+    {
+        if (log)
             logRequest(request);
-        }
 
-        if (authorized(request))
+        UserAuth user = null;
+        
+        if(authenticatedIP(request)) // Validate Whitelist
         {
-            if (usersReload(request)) 
-            { // display custom health check page when unauthorized (do not display too much server info)
+        	super.internalDispatchRequest(request, channel);
+        }
+        else if ((user = authBasic(request)) != null) // Validate Basic auth users
+        {
+        	// User has authenticated
+            if (usersReload(request) && user.isAdmin) 
+            { 
+            	// Reloads users from file
             	String ret = reloadUsersFile();
             	channel.sendResponse(new BytesRestResponse(OK, "{\"OK\":{\"" + ret + "\"}}"));
             }
-            else // Send to ES
+            else if(user.hasPermission(request) || user.isAdmin)
+            {
             	super.internalDispatchRequest(request, channel);
+            }
+            else if (healthCheck(request))  
+                channel.sendResponse(new BytesRestResponse(OK, "{\"OK\":{}}"));
+            else
+            {
+            	// Refuses request
+            	//TODO: improve log later.
+                logUnAuthorizedRequest(request);
+            	channel.sendResponse(new BytesRestResponse(RestStatus.METHOD_NOT_ALLOWED, "{\"ERROR\":{}}"));
+            }
+            	
         } 
-        else if (healthCheck(request)) 
-        { // display custom health check page when unauthorized (do not display too much server info)
+        else if (healthCheck(request))  
             channel.sendResponse(new BytesRestResponse(OK, "{\"OK\":{}}"));
-        }
         else 
         {
             logUnAuthorizedRequest(request);
@@ -145,8 +158,8 @@ public class HttpBasicServer extends HttpServer {
    * @param request
    * @return true if the request is authorized
    */
-    private boolean authorized(final HttpRequest request) {
-      return allowOptionsForCORS(request) || authBasic(request) || ipAuthorized(request);
+    private boolean authenticatedIP(final HttpRequest request) {
+      return allowOptionsForCORS(request) || ipAuthorized(request);
     }
 
   /**
@@ -163,15 +176,15 @@ public class HttpBasicServer extends HttpServer {
                             new XForwardedFor(xForwardedFor),
                             proxyChains);
       ipAuthorized = client.isAuthorized();
-      if (ipAuthorized) {
-        if (log) {
+      if (ipAuthorized) 
+      {
+        if (log) 
+        {
           String template = "Ip Authorized client: {}";
           Loggers.getLogger(getClass()).info(template, client);
         }
-      } else {
-        String template = "Ip Unauthorized client: {}";
-        Loggers.getLogger(getClass()).error(template, client);
       }
+      
       return ipAuthorized;
     }
 
@@ -190,7 +203,7 @@ public class HttpBasicServer extends HttpServer {
         }
     }
 
-    private boolean authBasic(final HttpRequest request) {
+    private UserAuth authBasic(final HttpRequest request) {
         String decoded = "";
         try 
         {
@@ -200,28 +213,26 @@ public class HttpBasicServer extends HttpServer {
                 String[] userAndPassword = decoded.split(":", 2);
                 String givenUser = userAndPassword[0];
                 String givenPass = userAndPassword[1];
-                
-                // Validates Admin user
-                if (this.adminuser.equals(givenUser) && this.adminpassword.equals(givenPass))
-                    return true;
+                String givenIP = ((InetSocketAddress) request.getRemoteAddress()).getAddress().getHostAddress();
                 
                 // Validates All other users
                 for(int i = 0; i < this.users.size(); i++)
                 {
-                	if(this.users.get(i).user.equals(givenUser) && this.users.get(i).pass.equals(givenPass))
+                	UserAuth user = this.users.get(i);
+                	if(user.user.equals(givenUser) 
+                		&& user.pass.equals(givenPass) 
+                		&& (user.ip.equals(givenIP) || user.ip.equals("*")))
                 	{
-                		return true;
-
-                		//TODO: Implementar depois validação por método e index
-                		//if(request.path().equals("/") && isHealthCheckMethod(request.method());
-                		//break;
+                		return user;
                 	}
+                	
+                	logger.warn("IP Remoto:" + givenIP + " - USER:" + user.ip);
                 }
             }
         } catch (Exception e) {
             logger.warn("Retrieving of user and password failed for " + decoded + " ," + e.getMessage());
         }
-        return false;
+        return null;
     }
 
 
@@ -300,26 +311,51 @@ public class HttpBasicServer extends HttpServer {
 		{
 	    	try 
 	    	{
+	    		// Clears current users list.
+	    		users.clear();
+	    		
 	    	    String line = br.readLine();
 	    	    while (line != null) 
 	    	    {
-	    	    	String[] lineSplit = line.split(":");
-	    	    	if(lineSplit.length == 4)
+	    	    	if(line.substring(0) != "#") // Ignore comments
 	    	    	{
-	    	    		users.add(new UserAuth(lineSplit[0], lineSplit[1], lineSplit[2], lineSplit[3]));
-	    	    		if(result.isEmpty())
-	    	    			result += lineSplit[0];
-	    	    		else
-	    	    			result += ", " + lineSplit[0];
+		    	    	String[] lineSplit = line.split(":");
+		    	    	if(lineSplit.length >= 6)
+		    	    	{
+		    	    		try
+		    	    		{
+		    	    			boolean isAdmin = Integer.valueOf(lineSplit[5]) == 0 ? false : true;
+		    	    			
+			    	    		users.add(new UserAuth(lineSplit[0], lineSplit[1], lineSplit[2], lineSplit[3], lineSplit[4], isAdmin));
+			    	    		
+			    	    		// To show on log/HTTP response
+			    	    		if(!result.isEmpty())
+			    	    			result += ", ";
+			    	    		
+			    	    		result += lineSplit[0] + "(" + lineSplit[1] + ")";
+			    	    		//Loggers.getLogger(getClass()).warn("Adding user : " + line);
+
+		    	    		}
+		    	    		catch (Exception e)
+		    	    		{
+		    	    			e.printStackTrace();
+		    	    		}
+		    	    	}
+		    	    	else
+		    	    		Loggers.getLogger(getClass()).warn("Invalid user : " + line);
 	    	    	}
+	    	    	
 	    	        line = br.readLine();
 	    	    }
 	    	} 
 	    	catch (IOException e) 
 	    	{
-				// TODO Auto-generated catch block
 				e.printStackTrace();
-			} 
+			}
+	    	catch(Exception e)
+	    	{
+	    		e.printStackTrace();
+	    	}
 	    	finally 
 	    	{
 	    	    try 
@@ -333,6 +369,8 @@ public class HttpBasicServer extends HttpServer {
 				}
 	    	}
 		}
+		else
+			Loggers.getLogger(getClass()).error("Error loading users file: " + filename);
 		
 		return "Loaded users: " + result;
     }
