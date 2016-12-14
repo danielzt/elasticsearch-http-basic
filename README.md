@@ -18,12 +18,6 @@ There is no way to configure this on a per index basis.
 |     Http Basic Plugin       | elasticsearch                |
 |-----------------------------|------------------------------|
 | v1.5.1(master)              | 1.5.1, 1.5.2, 1.6.0, 1.7.0   |
-| v1.5.0                      | 1.5.0                        |
-| v1.4.0                      | 1.4.0                        |
-| v1.3.0                      | 1.3.0                        |
-| v1.2.0                      | 1.2.0                        |
-| 1.1.0                       | 1.0.0                        |
-| 1.0.4                       | 0.90.7                       |
 
 ## Installation
 
@@ -33,11 +27,17 @@ Download the desired version from https://github.com/Asquera/elasticsearch-http-
 
 Once the plugin is installed it can be configured in the [elasticsearch modules configuration file](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/setup-configuration.html#settings). See the [elasticserach directory layout information](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/setup-dir-layout.html) for more information about the default paths of an ES installation.
 
+Create a file users.conf on ES config directory with the following structure:
+
+# user:ip:pass:methods:indexes:isAdmin
+daniel:*:123:PUT,POST,GET,HEAD:*:0
+
+
+# ES Config
+
 |     Setting key                   |  Default value               | Notes                                                                   |
 |-----------------------------------|------------------------------|-------------------------------------------------------------------------|
 | `http.basic.enabled`              | true                         | **true** disables the default ES HTTP Transport module                  |
-| `http.basic.user`                 | "admin"                      |                                                                         |
-| `http.basic.password`             | "admin_pw"                   |                                                                         |
 | `http.basic.ipwhitelist`          | ["localhost", "127.0.0.1"]   | If set to `false` no ip will be whitelisted. Uses Host Name Resolution from [java.net.InetAddress](http://docs.oracle.com/javase/7/docs/api/java/net/InetAddress.html)                     |
 | `http.basic.trusted_proxy_chains` | []                           | Set an array of trusted proxies ips chains                              |
 | `http.basic.log`                  | false                        | enables plugin logging to ES log. Unauthenticated requests are always logged.                                         |
@@ -119,8 +119,6 @@ header as the common 'X-Forwarded-For':
 
 ```
 http.basic.log: true
-http.basic.user: "some_user"
-http.basic.password: "some_password"
 http.basic.ipwhitelist: ["3.3.3.3"]
 http.basic.xforward: "X-Forwarded-For"
 http.basic.trusted_proxy_chains: ["1.1.1.1,2.2.2.2"]
