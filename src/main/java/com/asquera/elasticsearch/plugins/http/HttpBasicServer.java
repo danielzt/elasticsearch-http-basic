@@ -6,6 +6,7 @@ import com.asquera.elasticsearch.plugins.http.auth.ProxyChains;
 import com.asquera.elasticsearch.plugins.http.auth.XForwardedFor;
 import org.elasticsearch.common.Base64;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.jackson.dataformat.yaml.YAMLFactory;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
@@ -19,9 +20,15 @@ import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestRequest.Method;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.net.InetSocketAddress;
 
 import static org.elasticsearch.rest.RestStatus.OK;
@@ -43,20 +50,23 @@ import static org.elasticsearch.rest.RestStatus.UNAUTHORIZED;
  */
 public class HttpBasicServer extends HttpServer {
 
-    private final String user;
-    private final String password;
+    private final String adminuser;
+    private final String adminpassword;
     private final InetAddressWhitelist whitelist;
     private final ProxyChains proxyChains;
     private final String xForwardHeader;
     private final boolean log;
+    private final List<UserAuth> users = new ArrayList<UserAuth>();
+    private final String usersFilename;
+
 
     @Inject public HttpBasicServer(Settings settings, Environment environment, HttpServerTransport transport,
             RestController restController,
             NodeService nodeService) {
         super(settings, environment, transport, restController, nodeService);
 
-        this.user = settings.get("http.basic.user", "admin");
-        this.password = settings.get("http.basic.password", "admin_pw");
+        this.adminuser = settings.get("http.basic.user", "admin");
+        this.adminpassword = settings.get("http.basic.password", "admin_pw");
         final boolean whitelistEnabled = settings.getAsBoolean("http.basic.ipwhitelist", true);
         String [] whitelisted = new String[0];
         if (whitelistEnabled) {
@@ -70,8 +80,13 @@ public class HttpBasicServer extends HttpServer {
         // for AWS load balancers it is X-Forwarded-For -> hmmh does not work
         this.xForwardHeader = settings.get("http.basic.xforward", "");
         this.log = settings.getAsBoolean("http.basic.log", true);
-        Loggers.getLogger(getClass()).info("using {}:{} with whitelist: {}, xforward header field: {}, trusted proxy chain: {}",
-                user, password, whitelist, xForwardHeader, proxyChains);
+        
+        Loggers.getLogger(getClass()).info("using {} with whitelist: {}, xforward header field: {}, trusted proxy chain: {}",
+                adminuser, whitelist, xForwardHeader, proxyChains);
+        this.usersFilename = environment.configFile().getAbsolutePath() + File.separator + "users.conf";
+        String ret = reloadUsersFile();
+        Loggers.getLogger(getClass()).info(ret);
+         
     }
 
     @Override
@@ -80,11 +95,22 @@ public class HttpBasicServer extends HttpServer {
             logRequest(request);
         }
 
-        if (authorized(request)) {
-            super.internalDispatchRequest(request, channel);
-        } else if (healthCheck(request)) { // display custom health check page when unauthorized (do not display too much server info)
+        if (authorized(request))
+        {
+            if (usersReload(request)) 
+            { // display custom health check page when unauthorized (do not display too much server info)
+            	String ret = reloadUsersFile();
+            	channel.sendResponse(new BytesRestResponse(OK, "{\"OK\":{\"" + ret + "\"}}"));
+            }
+            else // Send to ES
+            	super.internalDispatchRequest(request, channel);
+        } 
+        else if (healthCheck(request)) 
+        { // display custom health check page when unauthorized (do not display too much server info)
             channel.sendResponse(new BytesRestResponse(OK, "{\"OK\":{}}"));
-        } else {
+        }
+        else 
+        {
             logUnAuthorizedRequest(request);
             BytesRestResponse response = new BytesRestResponse(UNAUTHORIZED, "Authentication Required");
             response.addHeader("WWW-Authenticate", "Basic realm=\"Restricted\"");
@@ -105,6 +131,14 @@ public class HttpBasicServer extends HttpServer {
         return request.path().equals("/") && isHealthCheckMethod(request.method());
     }
 
+    // @param an http Request
+    // @returns True iff we check the root path and is a method allowed for healthCheck
+    private boolean usersReload(final HttpRequest request) {
+    	//Loggers.getLogger(getClass()).info("LOG CHEGOU path={} method={}",request.path(), request.method());
+        return request.path().equals("/_usersreload") && request.method().equals(RestRequest.Method.GET);
+    }
+    
+
   /**
    *
    *
@@ -112,8 +146,7 @@ public class HttpBasicServer extends HttpServer {
    * @return true if the request is authorized
    */
     private boolean authorized(final HttpRequest request) {
-      return allowOptionsForCORS(request) ||
-        authBasic(request) || ipAuthorized(request);
+      return allowOptionsForCORS(request) || authBasic(request) || ipAuthorized(request);
     }
 
   /**
@@ -159,14 +192,31 @@ public class HttpBasicServer extends HttpServer {
 
     private boolean authBasic(final HttpRequest request) {
         String decoded = "";
-        try {
+        try 
+        {
             decoded = getDecoded(request);
-            if (!decoded.isEmpty()) {
+            if (!decoded.isEmpty()) 
+            {
                 String[] userAndPassword = decoded.split(":", 2);
                 String givenUser = userAndPassword[0];
                 String givenPass = userAndPassword[1];
-                if (this.user.equals(givenUser) && this.password.equals(givenPass))
+                
+                // Validates Admin user
+                if (this.adminuser.equals(givenUser) && this.adminpassword.equals(givenPass))
                     return true;
+                
+                // Validates All other users
+                for(int i = 0; i < this.users.size(); i++)
+                {
+                	if(this.users.get(i).user.equals(givenUser) && this.users.get(i).pass.equals(givenPass))
+                	{
+                		return true;
+
+                		//TODO: Implementar depois validação por método e index
+                		//if(request.path().equals("/") && isHealthCheckMethod(request.method());
+                		//break;
+                	}
+                }
             }
         } catch (Exception e) {
             logger.warn("Retrieving of user and password failed for " + decoded + " ," + e.getMessage());
@@ -225,6 +275,66 @@ public class HttpBasicServer extends HttpServer {
         Loggers.getLogger(getClass()).error(t,
                 request.method(), addr, request.path(), request.params(),
                 request.content().toUtf8(), getDecoded(request));
+    }
+    
+    public String reloadUsersFile()
+    {
+    	String filename = usersFilename;
+    	String result = "";
+    	
+    	Loggers.getLogger(getClass()).info("Loading users file. Use GET /_usersreload to reload: {}", filename);
+    	
+    	// Permissions File
+    	BufferedReader br = null;
+		try {
+			br = new BufferedReader(new FileReader(filename));
+		} 
+		catch (FileNotFoundException e) 
+		{
+			// TODO Auto-generated catch block
+			//e.printStackTrace();
+			Loggers.getLogger(getClass()).error("USERS FILE NOT FOUND: {}", filename);
+		}
+		
+		if(br != null)
+		{
+	    	try 
+	    	{
+	    	    String line = br.readLine();
+	    	    while (line != null) 
+	    	    {
+	    	    	String[] lineSplit = line.split(":");
+	    	    	if(lineSplit.length == 4)
+	    	    	{
+	    	    		users.add(new UserAuth(lineSplit[0], lineSplit[1], lineSplit[2], lineSplit[3]));
+	    	    		if(result.isEmpty())
+	    	    			result += lineSplit[0];
+	    	    		else
+	    	    			result += ", " + lineSplit[0];
+	    	    	}
+	    	        line = br.readLine();
+	    	    }
+	    	} 
+	    	catch (IOException e) 
+	    	{
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} 
+	    	finally 
+	    	{
+	    	    try 
+	    	    {
+					br.close();
+				} 
+	    	    catch (IOException e) 
+	    	    {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+	    	}
+		}
+		
+		return "Loaded users: " + result;
     }
 
 }
