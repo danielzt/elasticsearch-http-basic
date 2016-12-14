@@ -225,8 +225,6 @@ public class HttpBasicServer extends HttpServer {
                 	{
                 		return user;
                 	}
-                	
-                	logger.warn("IP Remoto:" + givenIP + " - USER:" + user.ip);
                 }
             }
         } catch (Exception e) {
