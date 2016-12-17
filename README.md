@@ -1,17 +1,15 @@
 
-**IMPORTANT NOTICE** Fork of original Asquera project, will support multiple users and simple index/method permissions.
-
 [![Build Status](https://travis-ci.org/Asquera/elasticsearch-http-basic.svg?branch=master)](https://travis-ci.org/Asquera/elasticsearch-http-basic)
 
 # HTTP Basic / Ip auth for ElasticSearch
+
+**IMPORTANT NOTICE** Fork of original Asquera project, support multiple users and simple index/method permissions. 
+# Be aware that there is no safe way restrict access some indexes, this plugin just force that the "standard" way of acessing, will obey the index selection. Altough, there is no garantee on this.
 
 This plugin provides an extension of ElasticSearchs HTTP Transport module to enable **HTTP basic authentication** and/or
 **Ip based authentication**.
 
 Requesting `/` does not request authentication to simplify health check configuration.
-
-There is no way to configure this on a per index basis.
-
 
 ## Version Mapping
 
@@ -21,7 +19,7 @@ There is no way to configure this on a per index basis.
 
 ## Installation
 
-Download the desired version from https://github.com/Asquera/elasticsearch-http-basic/releases and copy it to `plugins/http-basic`.
+Download the desired version from https://github.com/danielzt/elasticsearch-http-basic/releases and copy it to `plugins/http-basic`.
 
 ## Configuration
 
