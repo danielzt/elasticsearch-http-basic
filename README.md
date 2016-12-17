@@ -27,9 +27,11 @@ Once the plugin is installed it can be configured in the [elasticsearch modules 
 
 Create a file users.conf on ES config directory with the following structure:
 
-# user:ip:pass:methods:indexes:isAdmin
-daniel:*:123:PUT,POST,GET,HEAD:*:0
+    # user:ip:pass:methods:indexes:isAdmin
+    test:*:123:PUT,POST,GET,HEAD:*:0"
 
+
+isAdmin will allow any method/index access, also reloading users from file.
 
 # ES Config
 
